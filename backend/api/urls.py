@@ -21,6 +21,10 @@ api = NinjaAPI(
 from api.views import router as projects_router
 api.add_router("", projects_router)
 
+# Import and register kanban router
+from api.kanban_views import router as kanban_router
+api.add_router("", kanban_router)
+
 
 # Authentication Schemas
 class LoginRequest(Schema):

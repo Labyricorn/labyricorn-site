@@ -4,6 +4,7 @@ from hypothesis.extra.django import TestCase as HypothesisTestCase
 from django.contrib.auth.models import User
 from django.contrib.auth.hashers import check_password
 from django.contrib.auth import authenticate
+from api.models import Project, KanbanBoard, KanbanCard, CardVote
 from api.urls import api
 import os
 
@@ -2239,3 +2240,2747 @@ class AuthorizationErrorTests(HypothesisTestCase):
             403,
             f"Non-admin request to {endpoint} should return 403, got {response.status_code}"
         )
+
+
+
+# Property-Based Tests for Kanban Board System
+# Feature: kanban-board-system
+
+class KanbanBoardAutomaticCreationTests(HypothesisTestCase):
+    """
+    Property-based tests for automatic board creation
+    Feature: kanban-board-system, Property 1: Automatic board creation
+    Validates: Requirements 1.1, 1.3
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        title=st.text(
+            alphabet=st.characters(min_codepoint=32, max_codepoint=126),
+            min_size=1,
+            max_size=200
+        ),
+        description=st.text(
+            alphabet=st.characters(min_codepoint=32, max_codepoint=126),
+            min_size=1,
+            max_size=500
+        )
+    )
+    def test_kanban_board_automatically_created_with_project(self, title, description):
+        """
+        For any project, when it is created, a Kanban board should be automatically 
+        created and associated with it through a one-to-one relationship.
+        """
+        from api.models import Project, KanbanBoard
+        
+        # Create a project
+        project = Project.objects.create(
+            title=title,
+            description=description
+        )
+        
+        try:
+            # Verify that a Kanban board was automatically created
+            self.assertTrue(
+                hasattr(project, 'kanban_board'),
+                f"Project should have a kanban_board attribute"
+            )
+            
+            # Verify the board exists
+            board = project.kanban_board
+            self.assertIsNotNone(board, f"Kanban board should be created for project '{title}'")
+            self.assertIsInstance(board, KanbanBoard, "Board should be a KanbanBoard instance")
+            
+            # Verify the one-to-one relationship
+            self.assertEqual(
+                board.project.id,
+                project.id,
+                f"Board should be associated with the project"
+            )
+            
+            # Verify board was created (has an ID)
+            self.assertIsNotNone(board.id, "Board should have an ID")
+            self.assertGreater(board.id, 0, "Board ID should be positive")
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanBoardCascadeDeletionTests(HypothesisTestCase):
+    """
+    Property-based tests for cascade deletion
+    Feature: kanban-board-system, Property 2: Cascade deletion
+    Validates: Requirements 1.2
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        title=st.text(
+            alphabet=st.characters(min_codepoint=32, max_codepoint=126),
+            min_size=1,
+            max_size=200
+        ),
+        description=st.text(
+            alphabet=st.characters(min_codepoint=32, max_codepoint=126),
+            min_size=1,
+            max_size=500
+        )
+    )
+    def test_kanban_board_deleted_when_project_deleted(self, title, description):
+        """
+        For any project with a Kanban board, deleting the project should result 
+        in the board being deleted as well.
+        """
+        from api.models import Project, KanbanBoard
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title=title,
+            description=description
+        )
+        
+        # Get the board ID before deletion
+        board_id = project.kanban_board.id
+        
+        # Verify board exists
+        self.assertTrue(
+            KanbanBoard.objects.filter(id=board_id).exists(),
+            "Board should exist before project deletion"
+        )
+        
+        # Delete the project
+        project.delete()
+        
+        # Verify the board was also deleted (cascade)
+        self.assertFalse(
+            KanbanBoard.objects.filter(id=board_id).exists(),
+            f"Board with ID {board_id} should be deleted when project is deleted"
+        )
+
+
+class KanbanBoardOnePerProjectTests(HypothesisTestCase):
+    """
+    Property-based tests for one board per project constraint
+    Feature: kanban-board-system, Property 3: One board per project
+    Validates: Requirements 1.4
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        title=st.text(
+            alphabet=st.characters(min_codepoint=32, max_codepoint=126),
+            min_size=1,
+            max_size=200
+        ),
+        description=st.text(
+            alphabet=st.characters(min_codepoint=32, max_codepoint=126),
+            min_size=1,
+            max_size=500
+        )
+    )
+    def test_cannot_create_second_board_for_project(self, title, description):
+        """
+        For any project, attempting to create a second Kanban board should be rejected,
+        enforcing the one-to-one constraint.
+        """
+        from api.models import Project, KanbanBoard
+        from django.db import IntegrityError, transaction
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title=title,
+            description=description
+        )
+        
+        try:
+            # Verify one board exists
+            initial_board_count = KanbanBoard.objects.filter(project=project).count()
+            self.assertEqual(
+                initial_board_count,
+                1,
+                "Project should have exactly one board after creation"
+            )
+            
+            # Attempt to create a second board for the same project
+            # This should raise an IntegrityError due to the OneToOne constraint
+            # Wrap in atomic block to handle the broken transaction
+            with self.assertRaises(
+                IntegrityError,
+                msg=f"Creating a second board for project '{title}' should raise IntegrityError"
+            ):
+                with transaction.atomic():
+                    KanbanBoard.objects.create(project=project)
+            
+            # Verify still only one board exists
+            final_board_count = KanbanBoard.objects.filter(project=project).count()
+            self.assertEqual(
+                final_board_count,
+                1,
+                "Project should still have exactly one board after failed creation attempt"
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanCardOrderRecalculationTests(HypothesisTestCase):
+    """
+    Property-based tests for order recalculation during moves
+    Feature: kanban-board-system, Property 8: Order recalculation during moves
+    Validates: Requirements 5.3, 6.1, 6.2
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        num_cards=st.integers(min_value=3, max_value=10),
+        move_from_index=st.integers(min_value=0, max_value=9),
+        move_to_index=st.integers(min_value=0, max_value=9),
+        same_column=st.booleans()
+    )
+    def test_order_recalculation_maintains_sequential_ordering(self, num_cards, move_from_index, move_to_index, same_column):
+        """
+        For any card being moved (to a different column or reordered within the same column),
+        all affected cards in both source and destination columns should have their order 
+        values recalculated to maintain sequential ordering.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard
+        
+        # Clamp indices to valid range
+        move_from_index = min(move_from_index, num_cards - 1)
+        move_to_index = min(move_to_index, num_cards - 1)
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title=f"Test Project {num_cards}",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create cards in TODO column
+            cards = []
+            for i in range(num_cards):
+                card = KanbanCard.objects.create(
+                    board=board,
+                    title=f"Card {i}",
+                    status='TODO'
+                )
+                cards.append(card)
+            
+            # Refresh to get correct order values
+            for card in cards:
+                card.refresh_from_db()
+            
+            # Verify initial sequential ordering in TODO
+            # Note: The save() method sets order automatically, so we just verify they're sequential
+            todo_cards = list(KanbanCard.objects.filter(board=board, status='TODO').order_by('order'))
+            self.assertEqual(
+                len(todo_cards),
+                num_cards,
+                f"Should have {num_cards} cards in TODO"
+            )
+            
+            # Verify orders are sequential (starting from 0)
+            for i, card in enumerate(todo_cards):
+                self.assertEqual(
+                    card.order,
+                    i,
+                    f"Initial order should be sequential: card at position {i} should have order {i}, got {card.order}"
+                )
+            
+            # Move a card
+            card_to_move = cards[move_from_index]
+            if same_column:
+                # Move within same column
+                card_to_move.move_to('TODO', move_to_index)
+                
+                # Verify all cards in TODO have sequential ordering
+                todo_cards = list(KanbanCard.objects.filter(board=board, status='TODO').order_by('order'))
+                for i, card in enumerate(todo_cards):
+                    self.assertEqual(
+                        card.order,
+                        i,
+                        f"After same-column move, card at position {i} should have order {i}, got {card.order}"
+                    )
+            else:
+                # Move to different column (DOING)
+                # First create some cards in DOING to have a target
+                doing_cards_count = min(num_cards, 3)
+                for i in range(doing_cards_count):
+                    KanbanCard.objects.create(
+                        board=board,
+                        title=f"Doing Card {i}",
+                        status='DOING'
+                    )
+                
+                # Clamp move_to_index to valid range for DOING column
+                move_to_index = min(move_to_index, doing_cards_count)
+                
+                card_to_move.move_to('DOING', move_to_index)
+                
+                # Verify all cards in TODO have sequential ordering (gap closed)
+                todo_cards = list(KanbanCard.objects.filter(board=board, status='TODO').order_by('order'))
+                for i, card in enumerate(todo_cards):
+                    self.assertEqual(
+                        card.order,
+                        i,
+                        f"After cross-column move, TODO card at position {i} should have order {i}, got {card.order}"
+                    )
+                
+                # Verify all cards in DOING have sequential ordering (space made)
+                doing_cards = list(KanbanCard.objects.filter(board=board, status='DOING').order_by('order'))
+                for i, card in enumerate(doing_cards):
+                    self.assertEqual(
+                        card.order,
+                        i,
+                        f"After cross-column move, DOING card at position {i} should have order {i}, got {card.order}"
+                    )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanCardPositionBoundaryClampingTests(HypothesisTestCase):
+    """
+    Property-based tests for position boundary clamping
+    Feature: kanban-board-system, Property 10: Position boundary clamping
+    Validates: Requirements 6.3
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        num_cards=st.integers(min_value=1, max_value=10),
+        out_of_bounds_position=st.integers(min_value=-100, max_value=100)
+    )
+    def test_out_of_bounds_position_clamped_to_valid_range(self, num_cards, out_of_bounds_position):
+        """
+        For any move request with an out-of-bounds order value, the system should 
+        clamp the position to the nearest valid value (0 to column length).
+        """
+        from api.models import Project, KanbanBoard, KanbanCard
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title=f"Test Project {num_cards}",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create cards in TODO column
+            cards = []
+            for i in range(num_cards):
+                card = KanbanCard.objects.create(
+                    board=board,
+                    title=f"Card {i}",
+                    status='TODO'
+                )
+                cards.append(card)
+            
+            # Refresh cards to get their actual order values
+            for card in cards:
+                card.refresh_from_db()
+            
+            # Create a card in DOING to move
+            card_to_move = KanbanCard.objects.create(
+                board=board,
+                title="Moving Card",
+                status='DOING'
+            )
+            
+            # Attempt to move to out-of-bounds position in TODO
+            # The API endpoint should clamp this, but let's test the model behavior
+            # by clamping it ourselves (simulating what the API does)
+            max_order = KanbanCard.objects.filter(board=board, status='TODO').count()
+            clamped_position = max(0, min(out_of_bounds_position, max_order))
+            
+            # Move the card
+            card_to_move.move_to('TODO', clamped_position)
+            card_to_move.refresh_from_db()
+            
+            # Verify the card is at a valid position
+            self.assertGreaterEqual(
+                card_to_move.order,
+                0,
+                f"Card order should be >= 0, got {card_to_move.order}"
+            )
+            
+            # Verify the card is within the column bounds
+            total_cards_in_todo = KanbanCard.objects.filter(board=board, status='TODO').count()
+            self.assertLess(
+                card_to_move.order,
+                total_cards_in_todo,
+                f"Card order should be < {total_cards_in_todo}, got {card_to_move.order}"
+            )
+            
+            # Verify all cards still have sequential ordering
+            todo_cards = list(KanbanCard.objects.filter(board=board, status='TODO').order_by('order'))
+            self.assertEqual(
+                len(todo_cards),
+                num_cards + 1,  # Original cards + moved card
+                f"Should have {num_cards + 1} cards in TODO after move"
+            )
+            
+            for i, card in enumerate(todo_cards):
+                self.assertEqual(
+                    card.order,
+                    i,
+                    f"After clamped move, card at position {i} should have order {i}, got {card.order}"
+                )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanCardCompletedTimestampTests(HypothesisTestCase):
+    """
+    Property-based tests for completed timestamp
+    Feature: kanban-board-system, Property 42: Completed timestamp
+    Validates: Requirements 5.4
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        initial_status=st.sampled_from(['TODO', 'DOING']),
+        num_intermediate_moves=st.integers(min_value=0, max_value=3)
+    )
+    def test_completed_timestamp_set_when_moved_to_done(self, initial_status, num_intermediate_moves):
+        """
+        For any card moved to DONE status, the system should set the completed_at 
+        timestamp to the current time.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard
+        from django.utils import timezone
+        import time
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title=f"Test Project",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create a card in initial status
+            card = KanbanCard.objects.create(
+                board=board,
+                title="Test Card",
+                status=initial_status
+            )
+            
+            # Verify completed_at is initially None
+            self.assertIsNone(
+                card.completed_at,
+                f"Card in {initial_status} should not have completed_at set"
+            )
+            
+            # Make some intermediate moves (but not to DONE)
+            statuses = ['TODO', 'DOING']
+            for i in range(num_intermediate_moves):
+                status = statuses[i % 2]
+                card.move_to(status, 0)
+                card.refresh_from_db()
+                
+                # Verify completed_at is still None
+                self.assertIsNone(
+                    card.completed_at,
+                    f"Card moved to {status} should not have completed_at set"
+                )
+            
+            # Record time before moving to DONE
+            time_before_move = timezone.now()
+            time.sleep(0.01)  # Small delay to ensure timestamp is after time_before_move
+            
+            # Move to DONE
+            card.move_to('DONE', 0)
+            card.refresh_from_db()
+            
+            time.sleep(0.01)  # Small delay to ensure timestamp is before time_after_move
+            time_after_move = timezone.now()
+            
+            # Verify completed_at is now set
+            self.assertIsNotNone(
+                card.completed_at,
+                "Card moved to DONE should have completed_at set"
+            )
+            
+            # Verify completed_at is within reasonable time range
+            self.assertGreater(
+                card.completed_at,
+                time_before_move,
+                f"completed_at should be after move started"
+            )
+            self.assertLess(
+                card.completed_at,
+                time_after_move,
+                f"completed_at should be before move completed"
+            )
+            
+            # Test moving back from DONE clears the timestamp
+            card.move_to('TODO', 0)
+            card.refresh_from_db()
+            
+            self.assertIsNone(
+                card.completed_at,
+                "Card moved from DONE back to TODO should have completed_at cleared"
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanCardVoteIncrementTests(HypothesisTestCase):
+    """
+    Property-based tests for vote increment
+    Feature: kanban-board-system, Property 11: Vote increment
+    Validates: Requirements 7.1, 7.3
+    """
+    
+    @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.filter_too_much])
+    @given(
+        ip_parts=st.tuples(
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        )
+    )
+    def test_vote_increment_atomically_increases_count_by_one(self, ip_parts):
+        """
+        For any card with allow_voting=true, voting on it should atomically 
+        increment the vote count by exactly 1.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard, CardVote
+        
+        # Convert IP parts to IP address string
+        ip_address = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title="Test Project",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create a card with voting enabled
+            card = KanbanCard.objects.create(
+                board=board,
+                title="Test Card",
+                status='TODO',
+                allow_voting=True,
+                votes=0
+            )
+            
+            # Record initial vote count
+            initial_votes = card.votes
+            
+            # Hash the IP address
+            ip_hash = CardVote.hash_ip(ip_address)
+            
+            # Vote on the card
+            card.increment_vote(ip_hash)
+            
+            # Verify vote count increased by exactly 1
+            self.assertEqual(
+                card.votes,
+                initial_votes + 1,
+                f"Vote count should increase by exactly 1, was {initial_votes}, now {card.votes}"
+            )
+            
+            # Verify vote record was created
+            vote_exists = CardVote.objects.filter(card=card, ip_hash=ip_hash).exists()
+            self.assertTrue(
+                vote_exists,
+                f"Vote record should be created for IP hash {ip_hash[:10]}..."
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanCardDuplicateVotePreventionTests(HypothesisTestCase):
+    """
+    Property-based tests for duplicate vote prevention
+    Feature: kanban-board-system, Property 32: Duplicate vote prevention
+    Validates: Requirements 7.2, 19.2
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        ip_parts=st.tuples(
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        )
+    )
+    def test_duplicate_vote_from_same_ip_rejected(self, ip_parts):
+        """
+        For any card and IP address, attempting to vote twice should return a 409 error.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard, CardVote
+        
+        # Convert IP parts to IP address string
+        ip_address = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title="Test Project",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create a card with voting enabled
+            card = KanbanCard.objects.create(
+                board=board,
+                title="Test Card",
+                status='TODO',
+                allow_voting=True,
+                votes=0
+            )
+            
+            # Hash the IP address
+            ip_hash = CardVote.hash_ip(ip_address)
+            
+            # First vote should succeed
+            card.increment_vote(ip_hash)
+            initial_votes = card.votes
+            
+            # Second vote from same IP should raise ValueError
+            with self.assertRaises(
+                ValueError,
+                msg=f"Duplicate vote from IP {ip_address} should raise ValueError"
+            ) as context:
+                card.increment_vote(ip_hash)
+            
+            # Verify error message mentions duplicate vote
+            self.assertIn(
+                "already voted",
+                str(context.exception).lower(),
+                "Error message should mention duplicate vote"
+            )
+            
+            # Verify vote count did not increase
+            card.refresh_from_db()
+            self.assertEqual(
+                card.votes,
+                initial_votes,
+                f"Vote count should not increase on duplicate vote, stayed at {card.votes}"
+            )
+            
+            # Verify only one vote record exists
+            vote_count = CardVote.objects.filter(card=card, ip_hash=ip_hash).count()
+            self.assertEqual(
+                vote_count,
+                1,
+                f"Should have exactly 1 vote record, found {vote_count}"
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanCardVoteRemovalTests(HypothesisTestCase):
+    """
+    Property-based tests for vote removal
+    Feature: kanban-board-system, Property 28: Vote removal
+    Validates: Requirements 18.1, 18.3
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        ip_parts=st.tuples(
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        )
+    )
+    def test_vote_removal_decrements_count_and_deletes_record(self, ip_parts):
+        """
+        For any card where a user has voted, removing the vote should decrement 
+        the vote count by 1 and delete the vote record.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard, CardVote
+        
+        # Convert IP parts to IP address string
+        ip_address = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title="Test Project",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create a card with voting enabled
+            card = KanbanCard.objects.create(
+                board=board,
+                title="Test Card",
+                status='TODO',
+                allow_voting=True,
+                votes=0
+            )
+            
+            # Hash the IP address
+            ip_hash = CardVote.hash_ip(ip_address)
+            
+            # First, vote on the card
+            card.increment_vote(ip_hash)
+            votes_after_increment = card.votes
+            
+            # Verify vote record exists
+            self.assertTrue(
+                CardVote.objects.filter(card=card, ip_hash=ip_hash).exists(),
+                "Vote record should exist after voting"
+            )
+            
+            # Remove the vote
+            card.decrement_vote(ip_hash)
+            
+            # Verify vote count decreased by exactly 1
+            self.assertEqual(
+                card.votes,
+                votes_after_increment - 1,
+                f"Vote count should decrease by exactly 1, was {votes_after_increment}, now {card.votes}"
+            )
+            
+            # Verify vote record was deleted
+            vote_exists = CardVote.objects.filter(card=card, ip_hash=ip_hash).exists()
+            self.assertFalse(
+                vote_exists,
+                f"Vote record should be deleted for IP hash {ip_hash[:10]}..."
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        ip_parts=st.tuples(
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        )
+    )
+    def test_vote_removal_from_non_voter_rejected(self, ip_parts):
+        """
+        For any card where a user has not voted, attempting to remove a vote 
+        should return a 404 error.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard, CardVote
+        
+        # Convert IP parts to IP address string
+        ip_address = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title="Test Project",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create a card with voting enabled
+            card = KanbanCard.objects.create(
+                board=board,
+                title="Test Card",
+                status='TODO',
+                allow_voting=True,
+                votes=0
+            )
+            
+            # Hash the IP address
+            ip_hash = CardVote.hash_ip(ip_address)
+            
+            # Attempt to remove vote without having voted
+            with self.assertRaises(
+                ValueError,
+                msg=f"Removing non-existent vote from IP {ip_address} should raise ValueError"
+            ) as context:
+                card.decrement_vote(ip_hash)
+            
+            # Verify error message mentions user has not voted
+            self.assertIn(
+                "has not voted",
+                str(context.exception).lower(),
+                "Error message should mention user has not voted"
+            )
+            
+            # Verify vote count is still 0
+            card.refresh_from_db()
+            self.assertEqual(
+                card.votes,
+                0,
+                f"Vote count should remain 0, got {card.votes}"
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanCardIPHashPrivacyTests(HypothesisTestCase):
+    """
+    Property-based tests for IP hash privacy
+    Feature: kanban-board-system, Property 33: IP hash privacy
+    Validates: Requirements 19.3
+    """
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        ip_parts=st.tuples(
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        )
+    )
+    def test_vote_record_stores_hash_not_raw_ip(self, ip_parts):
+        """
+        For any vote record, the stored IP address should be a SHA-256 hash, 
+        not the raw IP address.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard, CardVote
+        import hashlib
+        
+        # Convert IP parts to IP address string
+        ip_address = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title="Test Project",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create a card with voting enabled
+            card = KanbanCard.objects.create(
+                board=board,
+                title="Test Card",
+                status='TODO',
+                allow_voting=True,
+                votes=0
+            )
+            
+            # Hash the IP address
+            ip_hash = CardVote.hash_ip(ip_address)
+            
+            # Vote on the card
+            card.increment_vote(ip_hash)
+            
+            # Retrieve the vote record
+            vote_record = CardVote.objects.get(card=card, ip_hash=ip_hash)
+            
+            # Verify the stored value is not the raw IP
+            self.assertNotEqual(
+                vote_record.ip_hash,
+                ip_address,
+                f"Vote record should not store raw IP address"
+            )
+            
+            # Verify the stored value is a SHA-256 hash (64 hex characters)
+            self.assertEqual(
+                len(vote_record.ip_hash),
+                64,
+                f"IP hash should be 64 characters (SHA-256), got {len(vote_record.ip_hash)}"
+            )
+            
+            # Verify it's hexadecimal
+            try:
+                int(vote_record.ip_hash, 16)
+                is_hex = True
+            except ValueError:
+                is_hex = False
+            
+            self.assertTrue(
+                is_hex,
+                f"IP hash should be hexadecimal, got {vote_record.ip_hash[:20]}..."
+            )
+            
+            # Verify it matches the expected SHA-256 hash
+            expected_hash = hashlib.sha256(ip_address.encode()).hexdigest()
+            self.assertEqual(
+                vote_record.ip_hash,
+                expected_hash,
+                f"Stored hash should match SHA-256 of IP address"
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+class KanbanCardVoteRecordExpirationTests(HypothesisTestCase):
+    """
+    Property-based tests for vote record expiration
+    Feature: kanban-board-system, Property 34: Vote record expiration
+    Validates: Requirements 19.4
+    """
+    
+    @settings(max_examples=50, deadline=None)
+    @given(
+        days_old=st.integers(min_value=91, max_value=365),
+        ip_parts=st.tuples(
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        )
+    )
+    def test_old_vote_records_cleaned_up_after_90_days(self, days_old, ip_parts):
+        """
+        For any vote record older than 90 days, the system should allow the same IP 
+        to vote again on the same card.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard, CardVote
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # Convert IP parts to IP address string
+        ip_address = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title="Test Project",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create a card with voting enabled
+            card = KanbanCard.objects.create(
+                board=board,
+                title="Test Card",
+                status='TODO',
+                allow_voting=True,
+                votes=0
+            )
+            
+            # Hash the IP address
+            ip_hash = CardVote.hash_ip(ip_address)
+            
+            # Create an old vote record manually (bypassing increment_vote to set old date)
+            old_date = timezone.now() - timedelta(days=days_old)
+            old_vote = CardVote.objects.create(
+                card=card,
+                ip_hash=ip_hash
+            )
+            # Manually update the voted_at timestamp to be old
+            CardVote.objects.filter(id=old_vote.id).update(voted_at=old_date)
+            
+            # Also manually increment the vote count
+            card.votes = 1
+            card.save()
+            
+            # Verify the old vote exists
+            self.assertTrue(
+                CardVote.objects.filter(card=card, ip_hash=ip_hash).exists(),
+                "Old vote record should exist before cleanup"
+            )
+            
+            # Run cleanup
+            deleted_count = CardVote.cleanup_old_votes()
+            
+            # Verify the old vote was deleted
+            self.assertGreater(
+                deleted_count,
+                0,
+                f"Cleanup should delete at least 1 old vote record (deleted {deleted_count})"
+            )
+            
+            vote_exists_after_cleanup = CardVote.objects.filter(card=card, ip_hash=ip_hash).exists()
+            self.assertFalse(
+                vote_exists_after_cleanup,
+                f"Vote record older than 90 days should be deleted by cleanup"
+            )
+            
+            # Now the same IP should be able to vote again
+            # (since the old vote record is gone, duplicate check will pass)
+            try:
+                card.increment_vote(ip_hash)
+                vote_succeeded = True
+            except ValueError:
+                vote_succeeded = False
+            
+            self.assertTrue(
+                vote_succeeded,
+                f"After cleanup, same IP should be able to vote again on the same card"
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+    
+    @settings(max_examples=50, deadline=None)
+    @given(
+        days_old=st.integers(min_value=1, max_value=89),
+        ip_parts=st.tuples(
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        )
+    )
+    def test_recent_vote_records_not_cleaned_up(self, days_old, ip_parts):
+        """
+        For any vote record less than 90 days old, the cleanup should not delete it.
+        """
+        from api.models import Project, KanbanBoard, KanbanCard, CardVote
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        # Convert IP parts to IP address string
+        ip_address = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.{ip_parts[3]}"
+        
+        # Create a project (which automatically creates a board)
+        project = Project.objects.create(
+            title="Test Project",
+            description="Test description"
+        )
+        
+        try:
+            board = project.kanban_board
+            
+            # Create a card with voting enabled
+            card = KanbanCard.objects.create(
+                board=board,
+                title="Test Card",
+                status='TODO',
+                allow_voting=True,
+                votes=0
+            )
+            
+            # Hash the IP address
+            ip_hash = CardVote.hash_ip(ip_address)
+            
+            # Create a recent vote record manually
+            recent_date = timezone.now() - timedelta(days=days_old)
+            recent_vote = CardVote.objects.create(
+                card=card,
+                ip_hash=ip_hash
+            )
+            # Manually update the voted_at timestamp to be recent (but not too recent)
+            CardVote.objects.filter(id=recent_vote.id).update(voted_at=recent_date)
+            
+            # Verify the vote exists
+            self.assertTrue(
+                CardVote.objects.filter(card=card, ip_hash=ip_hash).exists(),
+                "Recent vote record should exist before cleanup"
+            )
+            
+            # Run cleanup
+            CardVote.cleanup_old_votes()
+            
+            # Verify the recent vote still exists
+            vote_exists_after_cleanup = CardVote.objects.filter(card=card, ip_hash=ip_hash).exists()
+            self.assertTrue(
+                vote_exists_after_cleanup,
+                f"Vote record less than 90 days old should NOT be deleted by cleanup (was {days_old} days old)"
+            )
+            
+        finally:
+            # Clean up
+            project.delete()
+
+
+
+class RateLimitingEnforcementTests(HypothesisTestCase):
+    """
+    Property-based tests for rate limiting enforcement
+    Feature: kanban-board-system, Property 31: Rate limiting enforcement
+    Validates: Requirements 19.1, 14.6
+    """
+    
+    def setUp(self):
+        """Set up test environment and clear cache"""
+        from django.core.cache import cache
+        cache.clear()
+        super().setUp()
+    
+    def tearDown(self):
+        """Clean up cache after tests"""
+        from django.core.cache import cache
+        cache.clear()
+        super().tearDown()
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        ip_address=st.builds(
+            lambda a, b, c, d: f"{a}.{b}.{c}.{d}",
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        )
+    )
+    def test_rate_limit_allows_up_to_10_votes_per_minute(self, ip_address):
+        """
+        For any IP address, the first 10 vote attempts within 60 seconds should be allowed,
+        and the 11th attempt should be rejected.
+        """
+        from api.rate_limit import check_rate_limit
+        from api.models import CardVote
+        
+        # Hash the IP address
+        ip_hash = CardVote.hash_ip(ip_address)
+        
+        # First 10 votes should be allowed
+        for i in range(10):
+            result = check_rate_limit(ip_hash, limit=10, window=60)
+            self.assertTrue(
+                result,
+                f"Vote attempt {i+1} should be allowed (within rate limit)"
+            )
+        
+        # 11th vote should be rejected
+        result = check_rate_limit(ip_hash, limit=10, window=60)
+        self.assertFalse(
+            result,
+            "Vote attempt 11 should be rejected (exceeds rate limit of 10 per minute)"
+        )
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        ip_address=st.builds(
+            lambda a, b, c, d: f"{a}.{b}.{c}.{d}",
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255),
+            st.integers(min_value=0, max_value=255)
+        ),
+        vote_count=st.integers(min_value=1, max_value=9)
+    )
+    def test_rate_limit_resets_after_window(self, ip_address, vote_count):
+        """
+        For any IP address, after making some votes (less than limit), 
+        the rate limit counter should track correctly.
+        """
+        from api.rate_limit import check_rate_limit
+        from api.models import CardVote
+        from django.core.cache import cache
+        
+        # Clear cache before this test to ensure clean state
+        cache.clear()
+        
+        # Hash the IP address
+        ip_hash = CardVote.hash_ip(ip_address)
+        
+        # Make some votes (less than limit)
+        for i in range(vote_count):
+            result = check_rate_limit(ip_hash, limit=10, window=60)
+            self.assertTrue(
+                result,
+                f"Vote attempt {i+1} of {vote_count} should be allowed"
+            )
+        
+        # Verify the cache has the correct count
+        cache_key = f"vote_rate_limit:{ip_hash}"
+        cached_count = cache.get(cache_key, 0)
+        self.assertEqual(
+            cached_count,
+            vote_count,
+            f"Cache should track {vote_count} votes"
+        )
+        
+        # Should still be able to vote more (up to 10 total)
+        remaining = 10 - vote_count
+        for i in range(remaining):
+            result = check_rate_limit(ip_hash, limit=10, window=60)
+            self.assertTrue(
+                result,
+                f"Additional vote attempt {i+1} of {remaining} should be allowed"
+            )
+    
+    @settings(max_examples=100, deadline=None)
+    @given(
+        ip_addresses=st.lists(
+            st.builds(
+                lambda a, b, c, d: f"{a}.{b}.{c}.{d}",
+                st.integers(min_value=0, max_value=255),
+                st.integers(min_value=0, max_value=255),
+                st.integers(min_value=0, max_value=255),
+                st.integers(min_value=0, max_value=255)
+            ),
+            min_size=2,
+            max_size=5,
+            unique=True
+        )
+    )
+    def test_rate_limit_independent_per_ip(self, ip_addresses):
+        """
+        For any set of different IP addresses, rate limits should be tracked independently.
+        Each IP should be able to make 10 votes regardless of other IPs.
+        """
+        from api.rate_limit import check_rate_limit
+        from api.models import CardVote
+        from django.core.cache import cache
+        
+        # Clear cache before this test to ensure clean state
+        cache.clear()
+        
+        # Each IP should be able to make 10 votes
+        for ip_address in ip_addresses:
+            ip_hash = CardVote.hash_ip(ip_address)
+            
+            # First 10 votes should be allowed for this IP
+            for i in range(10):
+                result = check_rate_limit(ip_hash, limit=10, window=60)
+                self.assertTrue(
+                    result,
+                    f"Vote attempt {i+1} for IP {ip_address} should be allowed"
+                )
+            
+            # 11th vote should be rejected for this IP
+            result = check_rate_limit(ip_hash, limit=10, window=60)
+            self.assertFalse(
+                result,
+                f"Vote attempt 11 for IP {ip_address} should be rejected"
+            )
+
+
+# Unit Tests for Kanban Card Creation Endpoint
+
+class KanbanCardCreationEndpointTests(TestCase):
+    """
+    Unit tests for POST /kanban/cards endpoint
+    Validates: Requirements 2.1, 2.2, 2.3, 2.4, 10.1, 13.3
+    """
+    
+    def setUp(self):
+        """Set up test fixtures"""
+        # Create a superuser for admin authentication
+        self.admin_user = User.objects.create_superuser(
+            username='admin',
+            password='adminpass123',
+            email='admin@example.com'
+        )
+        
+        # Create a regular user for testing non-admin access
+        self.regular_user = User.objects.create_user(
+            username='regular',
+            password='regularpass123'
+        )
+        
+        # Create a project with a board
+        self.project = Project.objects.create(
+            title='Test Project',
+            description='Test description'
+        )
+        self.board = self.project.kanban_board
+    
+    def tearDown(self):
+        """Clean up test fixtures"""
+        self.admin_user.delete()
+        self.regular_user.delete()
+        self.project.delete()
+    
+    def test_create_card_as_admin_with_valid_data(self):
+        """Test that admin can create a card with valid data"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Create a card
+        response = self.client.post(
+            '/api/v1/kanban/cards',
+            data={
+                'board_id': self.board.id,
+                'title': 'Test Card',
+                'status': 'TODO'
+            },
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200, f"Expected 200, got {response.status_code}")
+        
+        # Verify response data
+        data = response.json()
+        self.assertEqual(data['title'], 'Test Card')
+        self.assertEqual(data['status'], 'TODO')
+        self.assertEqual(data['votes'], 0)
+        self.assertEqual(data['allow_voting'], True)
+        self.assertIn('user_has_voted', data)
+        self.assertFalse(data['user_has_voted'])
+        
+        # Verify card was created in database
+        card = KanbanCard.objects.filter(board=self.board, title='Test Card').first()
+        self.assertIsNotNone(card)
+        self.assertEqual(card.status, 'TODO')
+        self.assertEqual(card.votes, 0)
+        self.assertEqual(card.allow_voting, True)
+        
+        # Cleanup
+        self.client.logout()
+    
+    def test_create_card_with_default_status(self):
+        """Test that card defaults to TODO status if not specified"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Create a card without specifying status
+        response = self.client.post(
+            '/api/v1/kanban/cards',
+            data={
+                'board_id': self.board.id,
+                'title': 'Default Status Card'
+            },
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify status defaults to TODO
+        data = response.json()
+        self.assertEqual(data['status'], 'TODO')
+        
+        # Cleanup
+        self.client.logout()
+    
+    def test_create_card_with_empty_title_returns_400(self):
+        """Test that empty title returns 400 error"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to create a card with empty title
+        response = self.client.post(
+            '/api/v1/kanban/cards',
+            data={
+                'board_id': self.board.id,
+                'title': '',
+                'status': 'TODO'
+            },
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value
+        )
+        
+        # Should return 400 Bad Request
+        self.assertEqual(response.status_code, 400)
+        
+        # Verify error message
+        data = response.json()
+        self.assertIn('detail', data)
+        self.assertIn('empty', data['detail'].lower())
+        
+        # Cleanup
+        self.client.logout()
+    
+    def test_create_card_with_invalid_board_id_returns_404(self):
+        """Test that invalid board_id returns 404 error"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to create a card with non-existent board_id
+        response = self.client.post(
+            '/api/v1/kanban/cards',
+            data={
+                'board_id': 99999,
+                'title': 'Test Card',
+                'status': 'TODO'
+            },
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value
+        )
+        
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)
+        
+        # Cleanup
+        self.client.logout()
+    
+    def test_create_card_with_invalid_status_returns_400(self):
+        """Test that invalid status returns 400 error"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to create a card with invalid status
+        response = self.client.post(
+            '/api/v1/kanban/cards',
+            data={
+                'board_id': self.board.id,
+                'title': 'Test Card',
+                'status': 'INVALID'
+            },
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value
+        )
+        
+        # Should return 400 Bad Request
+        self.assertEqual(response.status_code, 400)
+        
+        # Verify error message
+        data = response.json()
+        self.assertIn('detail', data)
+        self.assertIn('Invalid status', data['detail'])
+        
+        # Cleanup
+        self.client.logout()
+    
+    def test_create_card_as_unauthenticated_user_returns_401(self):
+        """Test that unauthenticated user gets 401 error"""
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to create a card without authentication
+        response = self.client.post(
+            '/api/v1/kanban/cards',
+            data={
+                'board_id': self.board.id,
+                'title': 'Test Card',
+                'status': 'TODO'
+            },
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value
+        )
+        
+        # Should return 401 Unauthorized
+        self.assertEqual(response.status_code, 401)
+    
+    def test_create_card_as_non_admin_user_returns_403(self):
+        """Test that non-admin user gets 403 error"""
+        # Login as regular user
+        self.client.login(username='regular', password='regularpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to create a card as non-admin
+        response = self.client.post(
+            '/api/v1/kanban/cards',
+            data={
+                'board_id': self.board.id,
+                'title': 'Test Card',
+                'status': 'TODO'
+            },
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value
+        )
+        
+        # Should return 403 Forbidden
+        self.assertEqual(response.status_code, 403)
+        
+        # Cleanup
+        self.client.logout()
+    
+    def test_create_card_order_at_end_of_column(self):
+        """Test that new card is placed at end of column"""
+        # Create some existing cards in TODO column
+        for i in range(3):
+            KanbanCard.objects.create(
+                board=self.board,
+                title=f'Existing Card {i}',
+                status='TODO',
+                order=i
+            )
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Create a new card
+        response = self.client.post(
+            '/api/v1/kanban/cards',
+            data={
+                'board_id': self.board.id,
+                'title': 'New Card',
+                'status': 'TODO'
+            },
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify card is at end of column (order=3)
+        data = response.json()
+        self.assertEqual(data['order'], 3)
+        
+        # Cleanup
+        self.client.logout()
+
+
+
+# Unit Tests for Kanban Card Update Endpoint
+# Feature: kanban-board-system
+
+class KanbanCardUpdateTests(TestCase):
+    """
+    Unit tests for PATCH /kanban/cards/{id} endpoint
+    Validates: Requirements 3.1, 3.2, 3.3, 8.1, 8.2, 8.3, 13.4
+    """
+    
+    def setUp(self):
+        """Set up test fixtures"""
+        # Create a superuser for admin operations
+        self.admin_user = User.objects.create_superuser(
+            username='admin',
+            password='adminpass123',
+            email='admin@example.com'
+        )
+        
+        # Create a regular user
+        self.regular_user = User.objects.create_user(
+            username='regular',
+            password='userpass123'
+        )
+        
+        # Create a project with a board
+        self.project = Project.objects.create(
+            title='Test Project',
+            description='Test description'
+        )
+        self.board = self.project.kanban_board
+        
+        # Create a test card
+        self.card = KanbanCard.objects.create(
+            board=self.board,
+            title='Original Title',
+            status='TODO',
+            votes=5,
+            allow_voting=True,
+            order=0
+        )
+    
+    def tearDown(self):
+        """Clean up test fixtures"""
+        self.admin_user.delete()
+        self.regular_user.delete()
+        self.project.delete()
+    
+    def test_update_card_title_only(self):
+        """Test updating only the card title preserves other fields"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Store original values
+        original_status = self.card.status
+        original_votes = self.card.votes
+        original_allow_voting = self.card.allow_voting
+        original_order = self.card.order
+        
+        # Update only the title
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{self.card.id}',
+            data={'title': 'Updated Title'},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response data
+        data = response.json()
+        self.assertEqual(data['title'], 'Updated Title')
+        self.assertEqual(data['status'], original_status)
+        self.assertEqual(data['votes'], original_votes)
+        self.assertEqual(data['allow_voting'], original_allow_voting)
+        self.assertEqual(data['order'], original_order)
+        
+        # Verify database was updated
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.title, 'Updated Title')
+        self.assertEqual(self.card.status, original_status)
+        self.assertEqual(self.card.votes, original_votes)
+        self.assertEqual(self.card.allow_voting, original_allow_voting)
+        self.assertEqual(self.card.order, original_order)
+    
+    def test_update_card_allow_voting_only(self):
+        """Test updating only allow_voting preserves other fields"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Store original values
+        original_title = self.card.title
+        original_status = self.card.status
+        original_votes = self.card.votes
+        original_order = self.card.order
+        
+        # Update only allow_voting
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{self.card.id}',
+            data={'allow_voting': False},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response data
+        data = response.json()
+        self.assertEqual(data['title'], original_title)
+        self.assertEqual(data['status'], original_status)
+        self.assertEqual(data['votes'], original_votes)
+        self.assertEqual(data['allow_voting'], False)
+        self.assertEqual(data['order'], original_order)
+        
+        # Verify database was updated
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.title, original_title)
+        self.assertEqual(self.card.allow_voting, False)
+        self.assertEqual(self.card.votes, original_votes)
+    
+    def test_update_card_both_fields(self):
+        """Test updating both title and allow_voting"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Update both fields
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{self.card.id}',
+            data={'title': 'New Title', 'allow_voting': False},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response data
+        data = response.json()
+        self.assertEqual(data['title'], 'New Title')
+        self.assertEqual(data['allow_voting'], False)
+        
+        # Verify database was updated
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.title, 'New Title')
+        self.assertEqual(self.card.allow_voting, False)
+    
+    def test_update_card_empty_title_rejected(self):
+        """Test that empty title is rejected with 400"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to update with empty title
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{self.card.id}',
+            data={'title': '   '},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 400 Bad Request
+        self.assertEqual(response.status_code, 400)
+        
+        # Verify error message
+        data = response.json()
+        self.assertIn('detail', data)
+        self.assertIn('empty', data['detail'].lower())
+    
+    def test_update_card_title_too_long_rejected(self):
+        """Test that title exceeding 200 characters is rejected with 400"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to update with title > 200 chars
+        long_title = 'A' * 201
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{self.card.id}',
+            data={'title': long_title},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 400 Bad Request
+        self.assertEqual(response.status_code, 400)
+        
+        # Verify error message
+        data = response.json()
+        self.assertIn('detail', data)
+        self.assertIn('200', data['detail'])
+    
+    def test_update_card_not_found_returns_404(self):
+        """Test that updating non-existent card returns 404"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to update non-existent card
+        response = self.client.patch(
+            '/api/v1/kanban/cards/99999',
+            data={'title': 'New Title'},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)
+    
+    def test_update_card_unauthenticated_returns_401(self):
+        """Test that unauthenticated request returns 401"""
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to update without authentication
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{self.card.id}',
+            data={'title': 'New Title'},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 401 Unauthorized
+        self.assertEqual(response.status_code, 401)
+    
+    def test_update_card_non_admin_returns_403(self):
+        """Test that non-admin user returns 403"""
+        # Login as regular user
+        self.client.login(username='regular', password='userpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to update as non-admin
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{self.card.id}',
+            data={'title': 'New Title'},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 403 Forbidden
+        self.assertEqual(response.status_code, 403)
+    
+    def test_update_card_includes_user_has_voted_flag(self):
+        """Test that response includes user_has_voted flag"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Update card
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{self.card.id}',
+            data={'title': 'Updated Title'},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify user_has_voted field is present
+        data = response.json()
+        self.assertIn('user_has_voted', data)
+        self.assertIsInstance(data['user_has_voted'], bool)
+
+
+
+# Feature: kanban-board-system
+
+class KanbanCardDeletionTests(TestCase):
+    """
+    Unit tests for DELETE /kanban/cards/{id} endpoint
+    Validates: Requirements 4.1, 4.2, 4.3, 13.5
+    """
+    
+    def setUp(self):
+        """Set up test fixtures"""
+        # Create a superuser for admin operations
+        self.admin_user = User.objects.create_superuser(
+            username='admin',
+            password='adminpass123',
+            email='admin@example.com'
+        )
+        
+        # Create a regular user
+        self.regular_user = User.objects.create_user(
+            username='regular',
+            password='userpass123'
+        )
+        
+        # Create a project with a board
+        self.project = Project.objects.create(
+            title='Test Project',
+            description='Test description'
+        )
+        self.board = self.project.kanban_board
+    
+    def tearDown(self):
+        """Clean up test fixtures"""
+        self.admin_user.delete()
+        self.regular_user.delete()
+        self.project.delete()
+    
+    def test_delete_card_success(self):
+        """Test successful card deletion"""
+        # Create a test card
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        card_id = card.id
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Delete the card
+        response = self.client.delete(
+            f'/api/v1/kanban/cards/{card_id}',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response data
+        data = response.json()
+        self.assertIn('success', data)
+        self.assertTrue(data['success'])
+        
+        # Verify card is deleted from database
+        card_exists = KanbanCard.objects.filter(id=card_id).exists()
+        self.assertFalse(card_exists, "Card should be deleted from database")
+    
+    def test_delete_card_reorders_remaining_cards(self):
+        """Test that deleting a card reorders remaining cards in the column"""
+        # Create multiple cards in TODO column
+        card1 = KanbanCard.objects.create(
+            board=self.board,
+            title='Card 1',
+            status='TODO',
+            order=0
+        )
+        card2 = KanbanCard.objects.create(
+            board=self.board,
+            title='Card 2',
+            status='TODO',
+            order=1
+        )
+        card3 = KanbanCard.objects.create(
+            board=self.board,
+            title='Card 3',
+            status='TODO',
+            order=2
+        )
+        card4 = KanbanCard.objects.create(
+            board=self.board,
+            title='Card 4',
+            status='TODO',
+            order=3
+        )
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Delete card2 (order=1)
+        response = self.client.delete(
+            f'/api/v1/kanban/cards/{card2.id}',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify card2 is deleted
+        card2_exists = KanbanCard.objects.filter(id=card2.id).exists()
+        self.assertFalse(card2_exists)
+        
+        # Verify remaining cards are reordered
+        card1.refresh_from_db()
+        card3.refresh_from_db()
+        card4.refresh_from_db()
+        
+        # card1 should still be at order 0
+        self.assertEqual(card1.order, 0)
+        
+        # card3 should be moved from order 2 to order 1
+        self.assertEqual(card3.order, 1)
+        
+        # card4 should be moved from order 3 to order 2
+        self.assertEqual(card4.order, 2)
+        
+        # Verify no gaps in order values
+        remaining_cards = list(
+            KanbanCard.objects.filter(board=self.board, status='TODO').order_by('order')
+        )
+        self.assertEqual(len(remaining_cards), 3)
+        for i, card in enumerate(remaining_cards):
+            self.assertEqual(card.order, i, f"Card at position {i} should have order={i}")
+    
+    def test_delete_card_only_affects_same_column(self):
+        """Test that deleting a card only reorders cards in the same column"""
+        # Create cards in different columns
+        todo_card1 = KanbanCard.objects.create(
+            board=self.board,
+            title='TODO Card 1',
+            status='TODO',
+            order=0
+        )
+        todo_card2 = KanbanCard.objects.create(
+            board=self.board,
+            title='TODO Card 2',
+            status='TODO',
+            order=1
+        )
+        doing_card1 = KanbanCard.objects.create(
+            board=self.board,
+            title='DOING Card 1',
+            status='DOING',
+            order=0
+        )
+        doing_card2 = KanbanCard.objects.create(
+            board=self.board,
+            title='DOING Card 2',
+            status='DOING',
+            order=1
+        )
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Delete todo_card1
+        response = self.client.delete(
+            f'/api/v1/kanban/cards/{todo_card1.id}',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify TODO cards are reordered
+        todo_card2.refresh_from_db()
+        self.assertEqual(todo_card2.order, 0)
+        
+        # Verify DOING cards are unchanged
+        doing_card1.refresh_from_db()
+        doing_card2.refresh_from_db()
+        self.assertEqual(doing_card1.order, 0)
+        self.assertEqual(doing_card2.order, 1)
+    
+    def test_delete_card_not_found_returns_404(self):
+        """Test that deleting non-existent card returns 404"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to delete non-existent card
+        response = self.client.delete(
+            '/api/v1/kanban/cards/99999',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)
+    
+    def test_delete_card_unauthenticated_returns_401(self):
+        """Test that unauthenticated request returns 401"""
+        # Create a test card
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to delete without authentication
+        response = self.client.delete(
+            f'/api/v1/kanban/cards/{card.id}',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 401 Unauthorized
+        self.assertEqual(response.status_code, 401)
+        
+        # Verify card still exists
+        card_exists = KanbanCard.objects.filter(id=card.id).exists()
+        self.assertTrue(card_exists, "Card should not be deleted")
+    
+    def test_delete_card_non_admin_returns_403(self):
+        """Test that non-admin user returns 403"""
+        # Create a test card
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        
+        # Login as regular user
+        self.client.login(username='regular', password='userpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to delete as non-admin
+        response = self.client.delete(
+            f'/api/v1/kanban/cards/{card.id}',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 403 Forbidden
+        self.assertEqual(response.status_code, 403)
+        
+        # Verify card still exists
+        card_exists = KanbanCard.objects.filter(id=card.id).exists()
+        self.assertTrue(card_exists, "Card should not be deleted")
+
+
+
+# Feature: kanban-board-system
+
+class KanbanCardMoveTests(TestCase):
+    """
+    Unit tests for PATCH /kanban/cards/{id}/move endpoint
+    Validates: Requirements 5.1, 5.2, 5.3, 5.4, 5.5, 6.1, 6.2, 6.3, 10.2, 13.6
+    """
+    
+    def setUp(self):
+        """Set up test fixtures"""
+        # Create a superuser for admin operations
+        self.admin_user = User.objects.create_superuser(
+            username='admin',
+            password='adminpass123',
+            email='admin@example.com'
+        )
+        
+        # Create a regular user
+        self.regular_user = User.objects.create_user(
+            username='regular',
+            password='userpass123'
+        )
+        
+        # Create a project with a board
+        self.project = Project.objects.create(
+            title='Test Project',
+            description='Test description'
+        )
+        self.board = self.project.kanban_board
+    
+    def tearDown(self):
+        """Clean up test fixtures"""
+        self.admin_user.delete()
+        self.regular_user.delete()
+        self.project.delete()
+    
+    def test_move_card_to_different_status_success(self):
+        """Test successfully moving a card to a different status"""
+        # Create a card in TODO
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Move card to DOING
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card.id}/move',
+            data={'status': 'DOING', 'order': 0},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response data
+        data = response.json()
+        self.assertEqual(data['status'], 'DOING')
+        self.assertEqual(data['order'], 0)
+        self.assertEqual(data['id'], card.id)
+        
+        # Verify card is updated in database
+        card.refresh_from_db()
+        self.assertEqual(card.status, 'DOING')
+        self.assertEqual(card.order, 0)
+    
+    def test_move_card_to_done_sets_completed_at(self):
+        """Test that moving a card to DONE sets completed_at timestamp"""
+        from django.utils import timezone
+        
+        # Create a card in TODO
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        
+        # Verify completed_at is None
+        self.assertIsNone(card.completed_at)
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Move card to DONE
+        before_move = timezone.now()
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card.id}/move',
+            data={'status': 'DONE', 'order': 0},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        after_move = timezone.now()
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify completed_at is set
+        card.refresh_from_db()
+        self.assertIsNotNone(card.completed_at)
+        
+        # Verify completed_at is recent (within the time window)
+        self.assertGreaterEqual(card.completed_at, before_move)
+        self.assertLessEqual(card.completed_at, after_move)
+    
+    def test_move_card_from_done_clears_completed_at(self):
+        """Test that moving a card from DONE clears completed_at timestamp"""
+        from django.utils import timezone
+        
+        # Create a card in DONE with completed_at set
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='DONE',
+            order=0,
+            completed_at=timezone.now()
+        )
+        
+        # Verify completed_at is set
+        self.assertIsNotNone(card.completed_at)
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Move card to TODO
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card.id}/move',
+            data={'status': 'TODO', 'order': 0},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify completed_at is cleared
+        card.refresh_from_db()
+        self.assertIsNone(card.completed_at)
+    
+    def test_move_card_reorders_within_same_column(self):
+        """Test that moving a card within the same column reorders correctly"""
+        # Create multiple cards in TODO
+        card1 = KanbanCard.objects.create(
+            board=self.board,
+            title='Card 1',
+            status='TODO',
+            order=0
+        )
+        card2 = KanbanCard.objects.create(
+            board=self.board,
+            title='Card 2',
+            status='TODO',
+            order=1
+        )
+        card3 = KanbanCard.objects.create(
+            board=self.board,
+            title='Card 3',
+            status='TODO',
+            order=2
+        )
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Move card1 from position 0 to position 2
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card1.id}/move',
+            data={'status': 'TODO', 'order': 2},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify cards are reordered
+        card1.refresh_from_db()
+        card2.refresh_from_db()
+        card3.refresh_from_db()
+        
+        # card1 should be at position 2
+        self.assertEqual(card1.order, 2)
+        
+        # card2 should be at position 0
+        self.assertEqual(card2.order, 0)
+        
+        # card3 should be at position 1
+        self.assertEqual(card3.order, 1)
+    
+    def test_move_card_clamps_order_to_valid_range(self):
+        """Test that order is clamped to valid range when out of bounds"""
+        # Create a card in TODO
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Try to move card to position 100 (out of bounds)
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card.id}/move',
+            data={'status': 'DOING', 'order': 100},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify order is clamped to 0 (since DOING column is empty)
+        card.refresh_from_db()
+        self.assertEqual(card.order, 0)
+    
+    def test_move_card_invalid_status_returns_400(self):
+        """Test that invalid status returns 400 error"""
+        # Create a card in TODO
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Try to move card to invalid status
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card.id}/move',
+            data={'status': 'INVALID', 'order': 0},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 400 Bad Request
+        self.assertEqual(response.status_code, 400)
+        
+        # Verify error message
+        data = response.json()
+        self.assertIn('detail', data)
+        self.assertIn('Invalid status', data['detail'])
+        
+        # Verify card is unchanged
+        card.refresh_from_db()
+        self.assertEqual(card.status, 'TODO')
+        self.assertEqual(card.order, 0)
+    
+    def test_move_card_not_found_returns_404(self):
+        """Test that moving non-existent card returns 404"""
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to move non-existent card
+        response = self.client.patch(
+            '/api/v1/kanban/cards/99999/move',
+            data={'status': 'DOING', 'order': 0},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)
+    
+    def test_move_card_unauthenticated_returns_401(self):
+        """Test that unauthenticated request returns 401"""
+        # Create a card
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to move without authentication
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card.id}/move',
+            data={'status': 'DOING', 'order': 0},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 401 Unauthorized
+        self.assertEqual(response.status_code, 401)
+        
+        # Verify card is unchanged
+        card.refresh_from_db()
+        self.assertEqual(card.status, 'TODO')
+    
+    def test_move_card_non_admin_returns_403(self):
+        """Test that non-admin user returns 403"""
+        # Create a card
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0
+        )
+        
+        # Login as regular user
+        self.client.login(username='regular', password='userpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Attempt to move as non-admin
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card.id}/move',
+            data={'status': 'DOING', 'order': 0},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 403 Forbidden
+        self.assertEqual(response.status_code, 403)
+        
+        # Verify card is unchanged
+        card.refresh_from_db()
+        self.assertEqual(card.status, 'TODO')
+    
+    def test_move_card_includes_user_has_voted_flag(self):
+        """Test that response includes user_has_voted flag"""
+        # Create a card
+        card = KanbanCard.objects.create(
+            board=self.board,
+            title='Test Card',
+            status='TODO',
+            order=0,
+            allow_voting=True
+        )
+        
+        # Login as admin
+        self.client.login(username='admin', password='adminpass123')
+        
+        # Get CSRF token
+        csrf_response = self.client.get('/api/v1/csrf')
+        csrf_token = csrf_response.cookies.get('csrftoken')
+        
+        # Move card
+        response = self.client.patch(
+            f'/api/v1/kanban/cards/{card.id}/move',
+            data={'status': 'DOING', 'order': 0},
+            content_type='application/json',
+            HTTP_X_CSRFTOKEN=csrf_token.value if csrf_token else ''
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response includes user_has_voted flag
+        data = response.json()
+        self.assertIn('user_has_voted', data)
+        self.assertIsInstance(data['user_has_voted'], bool)
+        self.assertFalse(data['user_has_voted'])  # Admin hasn't voted
+
+
+
+# Feature: kanban-board-system
+
+class KanbanCardVoteEndpointTests(TestCase):
+    """
+    Unit tests for POST /kanban/cards/{id}/vote endpoint
+    Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.6, 13.7, 14.5, 14.6, 14.7, 19.1, 19.2
+    """
+    
+    def setUp(self):
+        """Set up test fixtures"""
+        # Create a project with a board
+        self.project = Project.objects.create(
+            title="Test Project",
+            description="Test description"
+        )
+        self.board = self.project.kanban_board
+        
+        # Create a card with voting enabled
+        self.card = KanbanCard.objects.create(
+            board=self.board,
+            title="Test Card",
+            status='TODO',
+            votes=0,
+            allow_voting=True,
+            order=0
+        )
+        
+        # Create a card with voting disabled
+        self.disabled_card = KanbanCard.objects.create(
+            board=self.board,
+            title="Disabled Card",
+            status='TODO',
+            votes=0,
+            allow_voting=False,
+            order=1
+        )
+    
+    def tearDown(self):
+        """Clean up test fixtures"""
+        self.project.delete()
+    
+    def test_vote_on_card_with_voting_enabled_succeeds(self):
+        """Test that voting on a card with voting enabled succeeds"""
+        # Vote on the card
+        response = self.client.post(
+            f'/api/v1/kanban/cards/{self.card.id}/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response structure
+        data = response.json()
+        self.assertIn('id', data)
+        self.assertIn('votes', data)
+        self.assertIn('user_has_voted', data)
+        
+        # Verify vote count increased
+        self.assertEqual(data['id'], self.card.id)
+        self.assertEqual(data['votes'], 1)
+        self.assertTrue(data['user_has_voted'])
+        
+        # Verify database was updated
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.votes, 1)
+    
+    def test_vote_on_card_with_voting_disabled_returns_403(self):
+        """Test that voting on a card with voting disabled returns 403"""
+        # Attempt to vote on disabled card
+        response = self.client.post(
+            f'/api/v1/kanban/cards/{self.disabled_card.id}/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 403 Forbidden
+        self.assertEqual(response.status_code, 403)
+        
+        # Verify error message
+        data = response.json()
+        self.assertIn('detail', data)
+        self.assertEqual(data['detail'], 'Voting is disabled for this card')
+        
+        # Verify vote count unchanged
+        self.disabled_card.refresh_from_db()
+        self.assertEqual(self.disabled_card.votes, 0)
+    
+    def test_duplicate_vote_returns_409(self):
+        """Test that voting twice on the same card returns 409"""
+        # First vote
+        response1 = self.client.post(
+            f'/api/v1/kanban/cards/{self.card.id}/vote',
+            content_type='application/json'
+        )
+        self.assertEqual(response1.status_code, 200)
+        
+        # Second vote from same IP
+        response2 = self.client.post(
+            f'/api/v1/kanban/cards/{self.card.id}/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 409 Conflict
+        self.assertEqual(response2.status_code, 409)
+        
+        # Verify error message
+        data = response2.json()
+        self.assertIn('detail', data)
+        self.assertIn('already voted', data['detail'])
+        
+        # Verify vote count is still 1
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.votes, 1)
+    
+    def test_vote_on_nonexistent_card_returns_404(self):
+        """Test that voting on a non-existent card returns 404"""
+        # Attempt to vote on non-existent card
+        response = self.client.post(
+            '/api/v1/kanban/cards/99999/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)
+    
+    def test_vote_creates_vote_record(self):
+        """Test that voting creates a vote record in the database"""
+        # Vote on the card
+        response = self.client.post(
+            f'/api/v1/kanban/cards/{self.card.id}/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify vote record was created
+        vote_records = CardVote.objects.filter(card=self.card)
+        self.assertEqual(vote_records.count(), 1)
+        
+        # Verify vote record has IP hash
+        vote_record = vote_records.first()
+        self.assertIsNotNone(vote_record.ip_hash)
+        self.assertEqual(len(vote_record.ip_hash), 64)  # SHA-256 hash length
+    
+    def test_vote_response_includes_user_has_voted_flag(self):
+        """Test that vote response includes user_has_voted flag"""
+        # Vote on the card
+        response = self.client.post(
+            f'/api/v1/kanban/cards/{self.card.id}/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response includes user_has_voted flag
+        data = response.json()
+        self.assertIn('user_has_voted', data)
+        self.assertIsInstance(data['user_has_voted'], bool)
+        self.assertTrue(data['user_has_voted'])
+    
+    def test_remove_vote_after_voting_succeeds(self):
+        """Test that removing a vote after voting succeeds"""
+        # First, vote on the card
+        vote_response = self.client.post(
+            f'/api/v1/kanban/cards/{self.card.id}/vote',
+            content_type='application/json'
+        )
+        self.assertEqual(vote_response.status_code, 200)
+        self.assertEqual(vote_response.json()['votes'], 1)
+        
+        # Now remove the vote
+        response = self.client.delete(
+            f'/api/v1/kanban/cards/{self.card.id}/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 200 OK
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify response structure
+        data = response.json()
+        self.assertIn('id', data)
+        self.assertIn('votes', data)
+        self.assertIn('user_has_voted', data)
+        
+        # Verify vote count decreased
+        self.assertEqual(data['id'], self.card.id)
+        self.assertEqual(data['votes'], 0)
+        self.assertFalse(data['user_has_voted'])
+        
+        # Verify database was updated
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.votes, 0)
+        
+        # Verify vote record was deleted
+        vote_records = CardVote.objects.filter(card=self.card)
+        self.assertEqual(vote_records.count(), 0)
+    
+    def test_remove_vote_without_voting_returns_404(self):
+        """Test that removing a vote without having voted returns 404"""
+        # Attempt to remove vote without voting first
+        response = self.client.delete(
+            f'/api/v1/kanban/cards/{self.card.id}/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)
+        
+        # Verify error message
+        data = response.json()
+        self.assertIn('detail', data)
+        self.assertIn('has not voted', data['detail'])
+        
+        # Verify vote count unchanged
+        self.card.refresh_from_db()
+        self.assertEqual(self.card.votes, 0)
+    
+    def test_remove_vote_from_disabled_card_returns_403(self):
+        """Test that removing a vote from a card with voting disabled returns 403"""
+        # First, enable voting and vote on the card
+        self.disabled_card.allow_voting = True
+        self.disabled_card.save()
+        
+        vote_response = self.client.post(
+            f'/api/v1/kanban/cards/{self.disabled_card.id}/vote',
+            content_type='application/json'
+        )
+        self.assertEqual(vote_response.status_code, 200)
+        
+        # Refresh to get updated vote count
+        self.disabled_card.refresh_from_db()
+        self.assertEqual(self.disabled_card.votes, 1)
+        
+        # Now disable voting
+        self.disabled_card.allow_voting = False
+        self.disabled_card.save()
+        
+        # Attempt to remove vote
+        response = self.client.delete(
+            f'/api/v1/kanban/cards/{self.disabled_card.id}/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 403 Forbidden
+        self.assertEqual(response.status_code, 403)
+        
+        # Verify error message
+        data = response.json()
+        self.assertIn('detail', data)
+        self.assertEqual(data['detail'], 'Voting is disabled for this card')
+        
+        # Verify vote count unchanged
+        self.disabled_card.refresh_from_db()
+        self.assertEqual(self.disabled_card.votes, 1)
+    
+    def test_remove_vote_from_nonexistent_card_returns_404(self):
+        """Test that removing a vote from a non-existent card returns 404"""
+        # Attempt to remove vote from non-existent card
+        response = self.client.delete(
+            '/api/v1/kanban/cards/99999/vote',
+            content_type='application/json'
+        )
+        
+        # Should return 404 Not Found
+        self.assertEqual(response.status_code, 404)

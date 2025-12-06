@@ -39,6 +39,11 @@ class NinjaCSRFMiddleware:
             if request.path == '/api/v1/csrf':
                 return self.get_response(request)
             
+            # Skip CSRF check for public voting endpoints
+            # These endpoints are public and don't require authentication
+            if '/vote' in request.path:
+                return self.get_response(request)
+            
             # Get CSRF token from header
             csrf_token = request.META.get('HTTP_X_CSRFTOKEN', '')
             
