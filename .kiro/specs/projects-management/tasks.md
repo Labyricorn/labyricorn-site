@@ -173,31 +173,54 @@
 
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 6. Generate TypeScript types from OpenAPI schema
+- [x] 6. Generate TypeScript types from OpenAPI schema
+
+
+
+
+
+
+
+
+
   - Run npm run gen:types to generate types from /api/v1/openapi.json
   - Verify ProjectSchema, ProjectListResponse, HeroImageSchema types are generated
   - Verify PaginationMeta type is generated
   - _Requirements: 12.1, 12.2, 12.3, 12.4, 16.1, 16.2, 16.3, 16.4, 16.5_
 
-- [ ] 7. Create React hooks for projects API
+- [x] 7. Create React hooks for projects API
+
+
+
+
+
   - Create useProjects hook with pagination support in frontend/src/hooks/
   - Create useProject hook for single project fetch
   - Configure TanStack Query with keepPreviousData for pagination
   - Implement error handling in hooks
   - _Requirements: 9.1, 9.4, 9.5_
 
-- [ ] 7.1 Write unit tests for useProjects hook
+- [x] 7.1 Write unit tests for useProjects hook
+
+
   - Test pagination parameters
   - Test data fetching and caching
   - Test error handling
   - _Requirements: 9.4, 9.5_
 
-- [ ] 7.2 Write unit tests for useProject hook
+- [x] 7.2 Write unit tests for useProject hook
+
+
   - Test single project fetch by slug
   - Test error handling for invalid slugs
   - _Requirements: 5.1, 5.2_
 
-- [ ] 8. Create ProjectCard component
+- [x] 8. Create ProjectCard component
+
+
+
+
+
   - Create ProjectCard component in frontend/src/components/
   - Implement hero image with aspect-ratio for layout stability
   - Add lazy loading for images
@@ -206,15 +229,23 @@
   - Handle click events for navigation
   - _Requirements: 8.4, 8.5_
 
-- [ ] 8.1 Write property test for card rendering completeness
+- [x] 8.1 Write property test for card rendering completeness
+
+
   - **Property 18: Project card rendering completeness**
   - **Validates: Requirements 8.4**
 
-- [ ] 8.2 Write property test for card navigation
+- [x] 8.2 Write property test for card navigation
+
   - **Property 19: Project card navigation**
   - **Validates: Requirements 8.5**
 
-- [ ] 9. Create ProjectGrid component with masonry layout
+- [x] 9. Create ProjectGrid component with masonry layout
+
+
+
+
+
   - Install react-responsive-masonry package
   - Create ProjectGrid component in frontend/src/components/
   - Implement responsive column breakpoints (1/2/3 columns)
@@ -222,13 +253,20 @@
   - Add skeleton loaders for loading state
   - _Requirements: 8.1, 8.2, 8.3_
 
-- [ ] 9.1 Write unit tests for ProjectGrid component
+- [x] 9.1 Write unit tests for ProjectGrid component
+
+
   - Test masonry layout rendering
   - Test responsive breakpoints
   - Test skeleton loader display
   - _Requirements: 8.1, 8.3_
 
-- [ ] 10. Update HomePage to display projects grid
+- [x] 10. Update HomePage to display projects grid
+
+
+
+
+
   - Update frontend/src/pages/HomePage.tsx
   - Use useProjects hook to fetch projects
   - Display ProjectGrid with fetched projects
@@ -237,7 +275,12 @@
   - Add pagination controls (optional for MVP)
   - _Requirements: 4.1, 8.1, 8.2, 8.3, 9.5_
 
-- [ ] 11. Create ProjectDetailPage
+- [x] 11. Create ProjectDetailPage
+
+
+
+
+
   - Create ProjectDetailPage component in frontend/src/pages/
   - Use useProject hook to fetch project by slug from URL params
   - Display hero image with full size
@@ -248,29 +291,47 @@
   - Style with cyberpunk theme
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5_
 
-- [ ] 11.1 Write property test for detail page rendering
+- [x] 11.1 Write property test for detail page rendering
+
+
   - **Property 20: Project detail rendering completeness**
   - **Validates: Requirements 9.2**
 
-- [ ] 11.2 Write property test for repository link rendering
+- [x] 11.2 Write property test for repository link rendering
+
+
   - **Property 21: Repository link rendering**
   - **Validates: Requirements 9.3**
 
-- [ ] 12. Add project routes to React Router
+- [x] 12. Add project routes to React Router
+
+
+
+
+
   - Update frontend/src/App.tsx
   - Add route for /projects/:slug to ProjectDetailPage
   - Ensure AppShell wraps project routes
   - Test navigation from HomePage to ProjectDetailPage
   - _Requirements: 15.1, 15.2, 15.3_
 
-- [ ] 13. Configure media files in Django settings
+- [x] 13. Configure media files in Django settings
+
+
+
+
   - Configure MEDIA_ROOT and MEDIA_URL in backend/labyricorn/settings.py
   - Add media URL pattern to backend/labyricorn/urls.py for development
   - Create media directory structure
   - Test image upload and retrieval
   - _Requirements: 1.5, 2.3, 2.4_
 
-- [ ] 14. Update project documentation
+- [x] 14. Update project documentation
+
+
+
+
+
   - Update README.md with Projects Management feature description
   - Document API endpoints for projects
   - Document how to create projects via Django admin
@@ -278,5 +339,8 @@
   - Add example curl commands for API testing
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
 
-- [ ] 15. Final checkpoint - Ensure all tests pass
+- [-] 15. Final checkpoint - Ensure all tests pass
+
+
+
   - Ensure all tests pass, ask the user if questions arise.

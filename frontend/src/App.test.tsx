@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import * as fc from 'fast-check';
 import { AppShell } from './components/layout/AppShell';
-import { HomePage } from './pages/HomePage';
-import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
+import { AppRoutes } from './App';
 
 /**
  * Unit tests for AppShell component
@@ -125,7 +124,6 @@ describe('NotFoundPage Component', () => {
  */
 describe('Property 12: Route handling completeness', () => {
   it('should render NotFoundPage for any undefined route', () => {
-    // Create a QueryClient for the test
     const queryClient = new QueryClient({
       defaultOptions: {
         queries: {
@@ -148,20 +146,16 @@ describe('Property 12: Route handling completeness', () => {
         ).map(chars => '/' + chars.join('')),
         (randomPath) => {
           // Skip defined routes
-          if (randomPath === '/' || randomPath === '/login') {
+          if (randomPath === '/' || randomPath === '/login' || randomPath.startsWith('/projects/')) {
             return true;
           }
 
-          // Render the routing structure with the random path
+          // Render AppRoutes with MemoryRouter for testing
           const { container } = render(
             <QueryClientProvider client={queryClient}>
               <MemoryRouter initialEntries={[randomPath]}>
                 <AppShell>
-                  <Routes>
-                    <Route path="/" element={<HomePage />} />
-                    <Route path="/login" element={<LoginPage />} />
-                    <Route path="*" element={<NotFoundPage />} />
-                  </Routes>
+                  <AppRoutes />
                 </AppShell>
               </MemoryRouter>
             </QueryClientProvider>
