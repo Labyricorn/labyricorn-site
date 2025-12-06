@@ -17,6 +17,10 @@ api = NinjaAPI(
     description="API for Labyricorn portfolio platform"
 )
 
+# Import and register projects router
+from api.views import router as projects_router
+api.add_router("", projects_router)
+
 
 # Authentication Schemas
 class LoginRequest(Schema):
