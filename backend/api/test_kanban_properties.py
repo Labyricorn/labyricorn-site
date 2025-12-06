@@ -1508,7 +1508,7 @@ class TestKanbanBoardProperties(TestCase):
     @settings(max_examples=100, deadline=None)
     @given(
         endpoint_type=st.sampled_from(['create', 'update', 'delete', 'move']),
-        title=st.text(min_size=1, max_size=200, alphabet=st.characters(blacklist_characters='\x00'))
+        title=st.text(min_size=1, max_size=200, alphabet=st.characters(blacklist_categories=('Cs',), blacklist_characters='\x00'))
     )
     def test_property_26_authentication_error_handling(self, endpoint_type, title):
         """

@@ -1,5 +1,13 @@
 import { useParams } from 'react-router-dom';
+import { useState } from 'react';
 import { useProject } from '../hooks/useProject';
+import { useKanbanBoard } from '../hooks/useKanbanBoard';
+import { useArchivedCards } from '../hooks/useArchivedCards';
+import { useMoveCard } from '../hooks/useMoveCard';
+import { useVoteCard } from '../hooks/useVoteCard';
+import { useRemoveVote } from '../hooks/useRemoveVote';
+import { useAuth } from '../hooks/useAuth';
+import { KanbanBoard } from '../components/KanbanBoard';
 
 /**
  * ProjectDetailPage displays complete information about a single project
@@ -9,14 +17,64 @@ import { useProject } from '../hooks/useProject';
  * - Displays hero image at full size
  * - Shows title, full description, tech stack, and repository link
  * - Handles 404 errors for invalid slugs
- * - Includes placeholder sections for Kanban and Devlogs tabs
+ * - Includes tabs for Overview, Kanban, and Devlogs
  * - Styled with cyberpunk theme
  * 
- * Requirements: 9.1, 9.2, 9.3, 9.4, 9.5
+ * Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 15.1, 15.2, 15.3, 15.4
  */
 export function ProjectDetailPage() {
   const { slug } = useParams<{ slug: string }>();
   const { data: project, isLoading, isError, error } = useProject(slug || '');
+  const [activeTab, setActiveTab] = useState<'overview' | 'kanban' | 'devlogs'>('overview');
+  const [isDragging, setIsDragging] = useState(false);
+  
+  // Auth state
+  const { currentUser } = useAuth();
+  const isAdmin = !!(currentUser?.is_staff || currentUser?.is_superuser);
+  
+  // Kanban data - only fetch when tab is active
+  const { 
+    data: kanbanBoard, 
+    isLoading: isLoadingKanban, 
+    isError: isKanbanError,
+    error: kanbanError 
+  } = useKanbanBoard(slug || '', isDragging);
+  
+  // Archived cards - only fetch when needed
+  const {
+    data: archivedPages,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useArchivedCards(slug || '');
+  
+  // Mutations
+  const moveCardMutation = useMoveCard(slug || '');
+  const voteCardMutation = useVoteCard(slug || '');
+  const removeVoteMutation = useRemoveVote(slug || '');
+  
+  // Handlers
+  const handleMoveCard = (cardId: number, status: string, order: number) => {
+    moveCardMutation.mutate({ cardId, status, order }, {
+      onError: (error) => {
+        alert(error.message || 'Failed to move card. Please try again.');
+      }
+    });
+  };
+  
+  const handleVoteCard = (cardId: number) => {
+    voteCardMutation.mutate(cardId);
+  };
+  
+  const handleRemoveVote = (cardId: number) => {
+    removeVoteMutation.mutate(cardId);
+  };
+  
+  const handleLoadMore = () => {
+    if (hasNextPage && !isFetchingNextPage) {
+      fetchNextPage();
+    }
+  };
 
   // Loading state
   if (isLoading) {
@@ -72,7 +130,7 @@ export function ProjectDetailPage() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8">
+    <div className="max-w-7xl mx-auto space-y-8">
       {/* Hero Image */}
       {project.hero_image.url && (
         <div className="w-full rounded-lg overflow-hidden shadow-2xl shadow-purple-500/20">
@@ -130,36 +188,111 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      {/* Full Description */}
-      <div className="prose prose-invert prose-purple max-w-none">
-        <p className="text-gray-300 text-lg leading-relaxed whitespace-pre-wrap">
-          {project.description}
-        </p>
+      {/* Tabs */}
+      <div className="border-b border-purple-500/20">
+        <nav className="flex gap-8" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab('overview')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'overview'
+                ? 'border-purple-500 text-purple-400'
+                : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-300'
+            }`}
+          >
+            Overview
+          </button>
+          <button
+            onClick={() => setActiveTab('kanban')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'kanban'
+                ? 'border-purple-500 text-purple-400'
+                : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-300'
+            }`}
+          >
+            Kanban
+          </button>
+          <button
+            onClick={() => setActiveTab('devlogs')}
+            className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'devlogs'
+                ? 'border-purple-500 text-purple-400'
+                : 'border-transparent text-gray-400 hover:text-gray-300 hover:border-gray-300'
+            }`}
+          >
+            Devlogs
+          </button>
+        </nav>
       </div>
 
-      {/* Placeholder Sections for Future Features */}
-      <div className="mt-12 space-y-6">
-        <div className="border-t border-purple-500/20 pt-8">
-          <h2 className="text-2xl font-semibold text-purple-300 mb-4">
-            Kanban Board
-          </h2>
-          <div className="p-8 bg-slate-900/50 rounded-lg border border-purple-500/20 text-center">
-            <p className="text-gray-400">
-              Kanban board coming soon...
-            </p>
+      {/* Tab Content */}
+      <div className="mt-8">
+        {/* Overview Tab */}
+        {activeTab === 'overview' && (
+          <div className="space-y-6">
+            <div className="prose prose-invert prose-purple max-w-none">
+              <p className="text-gray-300 text-lg leading-relaxed whitespace-pre-wrap">
+                {project.description}
+              </p>
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className="border-t border-purple-500/20 pt-8">
-          <h2 className="text-2xl font-semibold text-purple-300 mb-4">
-            Development Logs
-          </h2>
+        {/* Kanban Tab */}
+        {activeTab === 'kanban' && (
+          <div className="space-y-6">
+            {isLoadingKanban ? (
+              // Loading skeletons
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {[1, 2, 3].map((col) => (
+                  <div key={col} className="space-y-4">
+                    <div className="h-8 bg-slate-800 rounded w-24 animate-pulse"></div>
+                    <div className="space-y-3">
+                      {[1, 2, 3].map((card) => (
+                        <div key={card} className="h-24 bg-slate-800 rounded animate-pulse"></div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : isKanbanError ? (
+              // Error state
+              <div className="p-8 bg-slate-900/50 rounded-lg border border-red-500/20 text-center">
+                <p className="text-red-400">
+                  {kanbanError?.message || 'Failed to load Kanban board. Please try again.'}
+                </p>
+              </div>
+            ) : kanbanBoard ? (
+              // Kanban board
+              <KanbanBoard
+                board={kanbanBoard}
+                onMoveCard={handleMoveCard}
+                onVoteCard={handleVoteCard}
+                onRemoveVote={handleRemoveVote}
+                onLoadMore={handleLoadMore}
+                isLoadingMore={isFetchingNextPage}
+                isAdmin={isAdmin}
+                isDragging={isDragging}
+                onDraggingChange={setIsDragging}
+              />
+            ) : (
+              // Empty state
+              <div className="p-8 bg-slate-900/50 rounded-lg border border-purple-500/20 text-center">
+                <p className="text-gray-400">
+                  No Kanban board available for this project.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Devlogs Tab */}
+        {activeTab === 'devlogs' && (
           <div className="p-8 bg-slate-900/50 rounded-lg border border-purple-500/20 text-center">
             <p className="text-gray-400">
               Development logs coming soon...
             </p>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

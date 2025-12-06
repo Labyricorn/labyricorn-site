@@ -418,7 +418,9 @@
   - Document cron setup in deployment notes
   - _Requirements: 19.4_
 
-- [-] 20. Checkpoint - Ensure all backend tests pass
+- [x] 20. Checkpoint - Ensure all backend tests pass
+
+
 
 
 
@@ -426,42 +428,69 @@
   - Do a git commit and push to GitHub.
   - _Requirements: N/A (backend testing)
 
-- [ ] 21. Install frontend dependencies
+- [x] 21. Install frontend dependencies
+
+
+
+
   - Install @dnd-kit/core, @dnd-kit/sortable, @dnd-kit/utilities
   - Install @heroicons/react
   - Verify package.json is updated
   - _Requirements: 11.1_
 
-- [ ] 22. Generate TypeScript types from OpenAPI schema
+- [x] 22. Generate TypeScript types from OpenAPI schema
+
+
+
+
   - Run type generation script
   - Verify KanbanCardSchema and KanbanBoardSchema types
   - Verify ArchivedCardsSchema types
   - Verify request/response types for all endpoints
   - _Requirements: 17.1, 17.2, 17.3_
 
-- [ ] 23. Create useKanbanBoard hook with auto-refresh
+- [x] 23. Create useKanbanBoard hook with auto-refresh
+
+
+
+
+
+
   - Implement query with 15-second stale time
   - Add refetchInterval for auto-refresh
   - Pause refetch when isDragging is true
   - Return query object with data and loading states
   - _Requirements: 9.1, 21.1, 21.2, 21.3_
 
-- [ ] 23.1 Write property test for auto-refresh interval
+- [x] 23.1 Write property test for auto-refresh interval
+
+
   - **Property 40: Auto-refresh interval**
   - **Validates: Requirements 21.1, 21.2**
 
-- [ ] 23.2 Write property test for drag pause auto-refresh
+- [x] 23.2 Write property test for drag pause auto-refresh
+
+
   - **Property 41: Drag pause auto-refresh**
   - **Validates: Requirements 21.3**
 
-- [ ] 24. Create useArchivedCards hook
+- [x] 24. Create useArchivedCards hook
+
+
+
+
   - Implement infinite query with pagination
   - Support offset and limit parameters
   - Implement getNextPageParam for infinite scroll
   - Return pages array and fetchNextPage function
   - _Requirements: 20.1, 20.2, 20.3_
 
-- [ ] 25. Create useVoteCard hook with optimistic updates
+- [x] 25. Create useVoteCard hook with optimistic updates
+
+
+
+
+
   - Implement mutation with POST to /kanban/cards/{id}/vote
   - Optimistically increment votes and set user_has_voted=true
   - Revert on error with appropriate error messages
@@ -470,11 +499,17 @@
   - Invalidate queries on success
   - _Requirements: 12.1, 12.2, 12.3, 14.6, 14.7_
 
-- [ ] 25.1 Write property test for optimistic voting updates
+- [x] 25.1 Write property test for optimistic voting updates
+
+
   - **Property 22: Optimistic voting updates**
   - **Validates: Requirements 12.1, 12.2, 12.3**
 
-- [ ] 26. Create useRemoveVote hook
+- [x] 26. Create useRemoveVote hook
+
+
+
+
   - Implement mutation with DELETE to /kanban/cards/{id}/vote
   - Optimistically decrement votes and set user_has_voted=false
   - Revert on error with appropriate error messages
@@ -482,14 +517,22 @@
   - Invalidate queries on success
   - _Requirements: 18.1, 18.2, 18.3, 18.4_
 
-- [ ] 27. Create useMoveCard hook
+- [x] 27. Create useMoveCard hook
+
+
+
+
   - Implement mutation with PATCH to /kanban/cards/{id}/move
   - Send status and order in request body
   - Invalidate kanban query on success
   - Handle validation errors
   - _Requirements: 11.2, 11.3, 11.4_
 
-- [ ] 28. Create KanbanCard component
+- [x] 28. Create KanbanCard component
+
+
+
+
   - Implement useSortable for drag-and-drop
   - Display card title and vote count
   - Show filled heart icon if user_has_voted, outline otherwise
@@ -499,11 +542,16 @@
   - Add tooltip for vote button
   - _Requirements: 11.1, 12.1, 12.4, 16.2, 16.3, 16.4_
 
-- [ ] 28.1 Write property test for vote button disabled state
+- [x] 28.1 Write property test for vote button disabled state
+
   - **Property 23: Vote button disabled state**
   - **Validates: Requirements 12.4**
 
-- [ ] 29. Create KanbanColumn component
+- [x] 29. Create KanbanColumn component
+
+
+
+
   - Implement useDroppable for drop zone
   - Use SortableContext for card list
   - Display column title
@@ -512,7 +560,12 @@
   - Handle loading state for Load More
   - _Requirements: 15.3, 15.5, 15.6, 20.1_
 
-- [ ] 30. Create KanbanBoard component
+- [x] 30. Create KanbanBoard component
+
+
+
+
+
   - Implement DndContext with closestCorners collision
   - Track isDragging state
   - Handle drag start and drag end events
@@ -522,15 +575,23 @@
   - Wire up vote, remove vote, and move handlers
   - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 21.3_
 
-- [ ] 30.1 Write property test for drag-drop API integration
+- [x] 30.1 Write property test for drag-drop API integration
+
+
   - **Property 20: Drag-drop API integration**
   - **Validates: Requirements 11.2, 11.3**
 
-- [ ] 30.2 Write property test for drag-drop error handling
+- [x] 30.2 Write property test for drag-drop error handling
+
+
   - **Property 21: Drag-drop error handling**
   - **Validates: Requirements 11.4**
 
-- [ ] 31. Add Kanban tab to ProjectDetailPage
+- [x] 31. Add Kanban tab to ProjectDetailPage
+
+
+
+
   - Add "Kanban" tab to tab list
   - Fetch board data when tab is active
   - Display loading skeletons while loading
@@ -539,7 +600,12 @@
   - Handle archived cards loading
   - _Requirements: 15.1, 15.2, 15.3, 15.4_
 
-- [ ] 32. Apply cyberpunk theme styling
+- [x] 32. Apply cyberpunk theme styling
+
+
+
+
+
   - Use surface color (#1e293b) for column backgrounds
   - Use primary color (#a855f7) for card borders
   - Apply neon purple glow during drag
@@ -548,14 +614,23 @@
   - Add hover effects and transitions
   - _Requirements: 16.1, 16.2, 16.3, 16.4, 16.5_
 
-- [ ] 33. Implement touch device support
+- [x] 33. Implement touch device support
+
+
+
+
   - Configure @dnd-kit sensors for touch
   - Add press-and-hold delay before drag
   - Test on mobile devices
   - _Requirements: 11.6_
 
-- [ ] 34. Final checkpoint - Ensure all tests pass
+- [-] 34. Final checkpoint - Ensure all tests pass
+
+
+
   - Ensure all tests pass, ask the user if questions arise.
+  - commit to git and push to github
+  - _Requirements: N/A (backend testing)
 
 - [ ] 35. Manual testing and polish
   - Test drag-and-drop on desktop and mobile

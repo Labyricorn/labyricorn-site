@@ -339,7 +339,9 @@
   - Add example curl commands for API testing
   - _Requirements: 10.1, 10.2, 10.3, 10.4, 10.5_
 
-- [-] 15. Final checkpoint - Ensure all tests pass
+- [x] 15. Final checkpoint - Ensure all tests pass
+
+
 
 
 
